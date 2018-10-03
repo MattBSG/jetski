@@ -14,10 +14,12 @@ from datetime import datetime, timedelta
 
 from disco.bot import CommandLevels
 from disco.types.user import User as DiscoUser
+from disco.types.channel import Channel as DiscoChannel
 from disco.types.message import MessageTable, MessageEmbed, MessageEmbedField, MessageEmbedThumbnail
 from disco.types.permissions import Permissions
 from disco.util.functional import chunks
 from disco.util.sanitize import S
+from disco.api.http import Routes, APIException
 
 from rowboat.plugins import RowboatPlugin as Plugin, CommandFail, CommandSuccess
 from rowboat.util.timing import Eventual
@@ -749,7 +751,10 @@ class AdminPlugin(Plugin):
 
         if isinstance(user, (int, long)):
             self.can_act_on(event, user)
-            Infraction.ban(self, event, user, reason, guild=event.guild)
+            try:
+                Infraction.ban(self, event, user, reason, guild=event.guild)
+            except APIException:
+                raise CommandFail('invalid user')
         else:
             member = event.guild.get_member(user)
             if member:
@@ -885,10 +890,22 @@ class AdminPlugin(Plugin):
         q = Message.select(Message.id).join(User).order_by(Message.id.desc()).limit(size)
 
         if mode in ('all', 'channel'):
-            q = q.where((Message.channel_id == (channel or event.channel).id))
+            cid = event.channel.id
+            if channel:
+                cid = channel if isinstance(channel, (int, long)) else channel.id
+            channel = event.guild.channels.get(cid)
+            if not channel:
+                raise CommandFail('channel not found')
+            perms = channel.get_permissions(event.author)
+            if not (perms.administrator or perms.read_messages):
+                raise CommandFail('invalid permissions')
+            q = q.where(Message.channel_id == cid)
         else:
+            user_id = user if isinstance(user, (int, long)) else user.id
+            if event.author.id != user_id:
+                self.can_act_on(event, user_id)
             q = q.where(
-                (Message.author_id == (user if isinstance(user, (int, long)) else user.id)) &
+                (Message.author_id == user_id) &
                 (Message.guild_id == event.guild.id)
             )
 
@@ -1404,3 +1421,23 @@ class AdminPlugin(Plugin):
 
         self.unlocked_roles[role_id] = time.time() + 300
         raise CommandSuccess('role is unlocked for 5 minutes')
+
+    @Plugin.command('slowmode', '<interval:int> [channel:channel|snowflake]', level=CommandLevels.MOD)
+    def slowmode(self, event, interval=0, channel=None):
+        if 0 <= interval > 120:
+            raise CommandFail('rate limit interval must be between 0-120')
+        
+        if isinstance(channel, DiscoChannel):
+            channel = channel.id
+        
+        channel_id = channel or event.channel.id
+        self.bot.client.api.channels_modify(
+            channel_id,
+            rate_limit_per_user=interval,
+            reason=u'{} by {} ({})'.format('Enabled' if interval > 0 else 'Disabled', event.msg.author, event.msg.author.id)
+        )
+
+        if interval > 0:
+            raise CommandSuccess('slowmode enabled')
+        elif interval == 0:
+            raise CommandSuccess('slowmode disabled')

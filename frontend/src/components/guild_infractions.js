@@ -22,11 +22,11 @@ class InfractionTable extends Component {
           </tr>
           <tr>
             <td>Target User</td>
-            <td>{inf.user.username}#{inf.user.discriminator} ({inf.user.id})</td>
+            <td>{inf.user.username}#{String(inf.user.discriminator).padStart(4, "0")} ({inf.user.id})</td>
           </tr>
           <tr>
             <td>Actor User</td>
-            <td>{inf.actor.username}#{inf.actor.discriminator} ({inf.actor.id})</td>
+            <td>{inf.actor.username}#{String(inf.actor.discriminator).padStart(4, "0")} ({inf.actor.id})</td>
           </tr>
           <tr>
             <td>Created At</td>
@@ -54,7 +54,9 @@ class GuildInfractionInfo extends Component {
   render() {
     return (
       <div className="panel panel-default">
-        <div className="panel-heading">Infraction Info</div>
+        <div className="panel-heading">
+          <i className="fa fa-info-circle fa-fw"></i> Infraction Info
+        </div>
         <div className="panel-body">
           <InfractionTable infraction={this.props.infraction} />
         </div>
@@ -84,7 +86,7 @@ class GuildInfractionsTable extends Component {
             {
               Header: "Tag",
               id: "user_tag",
-              accessor: d => d.user.username + '#' + d.user.discriminator,
+              accessor: d => d.user.username + '#' + String(d.user.discriminator).padStart(4, "0"),
               filterable: false,
               sortable: false,
             }
@@ -94,7 +96,7 @@ class GuildInfractionsTable extends Component {
             {
               Header: "Tag",
               id: "actor_tag",
-              accessor: d => d.actor.username + '#' + d.actor.discriminator,
+              accessor: d => d.actor.username + '#' + String(d.actor.discriminator).padStart(4, "0"),
               filterable: false,
               sortable: false,
             }
@@ -170,13 +172,15 @@ export default class GuildInfractions extends Component {
     return (
       <div className="row">
         <div className="col-lg-12">
+          {this.state.infraction && <GuildInfractionInfo infraction={this.state.infraction} />}
           <div className="panel panel-default">
-            <div className="panel-heading">Infractions</div>
+            <div className="panel-heading">
+              <i className="fa fa-ban fa-fw"></i> Infractions
+            </div>
             <div className="panel-body">
               <GuildInfractionsTable guild={this.state.guild} onSelectInfraction={this.onSelectInfraction.bind(this)} />
             </div>
           </div>
-          {this.state.infraction && <GuildInfractionInfo infraction={this.state.infraction} />}
         </div>
       </div>
     );

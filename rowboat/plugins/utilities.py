@@ -9,12 +9,13 @@ from PIL import Image
 from peewee import fn
 from gevent.pool import Pool
 from datetime import datetime, timedelta
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 
 from disco.types.user import GameType, Status
 from disco.types.message import MessageEmbed
 from disco.util.snowflake import to_datetime
 from disco.util.sanitize import S
+from disco.api.http import Routes, APIException
 
 from rowboat.plugins import RowboatPlugin as Plugin, CommandFail
 from rowboat.util.timing import Eventual
@@ -174,7 +175,7 @@ class UtilitiesPlugin(Plugin):
     @Plugin.command('emoji', '<emoji:str>', global_=True)
     def emoji(self, event, emoji):
         if not EMOJI_RE.match(emoji):
-            return event.msg.reply(u'Unknown emoji: `{}`'.format(emoji))
+            return event.msg.reply(u'Unknown emoji: `{}`'.format(S(emoji)))
 
         fields = []
 
@@ -186,10 +187,14 @@ class UtilitiesPlugin(Plugin):
         if guild:
             fields.append('**Guild:** {} ({})'.format(S(guild.name), guild.id))
 
-        url = 'https://discordapp.com/api/emojis/{}.png'.format(eid)
+        anim = emoji.startswith('<a:')
+        fields.append('**Animated:** {}'.format('Yes' if anim else 'No'))
+
+        ext = 'gif' if anim else 'png'
+        url = 'https://discordapp.com/api/emojis/{}.{}'.format(eid, ext)
         r = requests.get(url)
         r.raise_for_status()
-        return event.msg.reply('\n'.join(fields), attachments=[('emoji.png', r.content)])
+        return event.msg.reply('\n'.join(fields), attachments=[('emoji.'+ext, r.content)])
 
     @Plugin.command('jumbo', '<emojis:str...>', global_=True)
     def jumbo(self, event, emojis):
@@ -321,8 +326,29 @@ class UtilitiesPlugin(Plugin):
         embed.description = '\n'.join(content)
         event.msg.reply('', embed=embed)
 
-    @Plugin.command('info', '<user:user>')
+    @Plugin.command('info', '<user:user|snowflake>')
     def info(self, event, user):
+        if isinstance(user, (int, long)):
+            try:
+                r = self.bot.client.api.http(Routes.USERS_GET, dict(user=user)) # hacky method cause this old version of Disco doesn't have a method for this and we're too lazy to update
+                data = r.json()
+                User = namedtuple('User', [
+                    'avatar',
+                    'discriminator',
+                    'id',
+                    'username',
+                    'presence'
+                ])
+                user = User(
+                    avatar=data["avatar"],
+                    discriminator=data["discriminator"],
+                    id=int(data["id"]),
+                    username=data["username"],
+                    presence=None
+                )
+            except APIException as e:
+                raise CommandFail('invalid user')
+        
         content = []
         content.append(u'**\u276F User Information**')
         content.append(u'ID: {}'.format(user.id))
@@ -511,7 +537,7 @@ class UtilitiesPlugin(Plugin):
     @Plugin.command('remind', '<duration:str> <content:str...>', global_=True)
     def cmd_remind(self, event, duration, content):
         if Reminder.count_for_user(event.author.id) > 30:
-            return event.msg.reply(':warning: you an only have 15 reminders going at once!')
+            return event.msg.reply(':warning: you can only have 15 reminders going at once!')
 
         remind_at = parse_duration(duration)
         if remind_at > (datetime.utcnow() + timedelta(seconds=5 * YEAR_IN_SEC)):

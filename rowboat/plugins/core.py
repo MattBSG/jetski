@@ -140,15 +140,25 @@ class CorePlugin(Plugin):
             elif data['type'] == 'RESTART':
                 self.log.info('Restart requested, signaling parent')
                 os.kill(os.getppid(), signal.SIGUSR1)
-            elif data['type'] == 'GUILD_DELETE' and data['id'] in self.guilds:
+            elif data['type'] == 'GUILD_DELETE':
+                name = self.guilds[data['id']].name if self.guilds.has_key(data['id']) else Guild.with_id(data['id']).name
                 with self.send_control_message() as embed:
                     embed.color = 0xff6961
                     embed.title = u'Guild Force Deleted {}'.format(
-                        self.guilds[data['id']].name,
+                        name,
                     )
 
-                self.log.info(u'Leaving guild %s', self.guilds[data['id']].name)
-                self.guilds[data['id']].leave()
+                try:
+                    self.log.info(u'Leaving guild %s', name)
+                    self.bot.client.api.users_me_guilds_delete(guild=data['id'])
+                except:
+                    self.log.info(u'Cannot leave guild %s, bot not in guild', name)
+                finally:
+                    self.log.info(u'Disabling guild %s', name)
+                    Guild.update(enabled=False).where(Guild.guild_id == data['id']).execute()
+
+                    self.log.info(u'Unwhilelisting guild %s', name)
+                    rdb.srem(GUILDS_WAITING_SETUP_KEY, str(data['id']))
 
     def unload(self, ctx):
         ctx['guilds'] = self.guilds
@@ -382,7 +392,11 @@ class CorePlugin(Plugin):
             return
 
         if not guild.enabled:
-            return
+            if rdb.sismember(GUILDS_WAITING_SETUP_KEY, str(event.id)):
+                guild.enabled = True
+                guild.save()
+            else:
+                return
 
         config = guild.get_config()
         if not config:
