@@ -39,7 +39,7 @@ The modlog plugin provides a mechanisim for logging various events and actions t
 | GUILD\_ROLE\_DELETE | A role is deleted |
 | GUILD\_BAN\_ADD | A ban is added |
 | MEMBER\_ROLE\_ADD | A role is added to a member |
-| MEMBER\_ROLE\_RMV | A role is removed from a member |
+| MEMBER\_ROLE\_REMOVE | A role is removed from a member |
 | MEMBER\_TEMP\_MUTED | A tempmute is added |
 | MEMBER\_MUTED | A mute is added |
 | MEMBER\_UNMUTED | A mute is removed |
