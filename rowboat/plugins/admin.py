@@ -295,7 +295,7 @@ class AdminPlugin(Plugin):
                 to_update[field] = getattr(role_before, field)
 
         if to_update:
-            self.log.warning('Rolling back update to roll %s (in %s), roll is locked', event.role.id, event.guild_id)
+            self.log.warning('Rolling back update to role %s (in %s), role is locked', event.role.id, event.guild_id)
             self.role_debounces[event.role.id] = time.time() + 60
             event.role.update(**to_update)
 
@@ -380,6 +380,7 @@ class AdminPlugin(Plugin):
         embed.set_thumbnail(url=infraction.user.get_avatar_url())
         embed.add_field(name='User', value=unicode(infraction.user), inline=True)
         embed.add_field(name='Moderator', value=unicode(infraction.actor), inline=True)
+        embed.add_field(name='ID', value=unicode(infraction.id), inline=True)
         embed.add_field(name='Active', value='yes' if infraction.active else 'no', inline=True)
         if infraction.active and infraction.expires_at:
             embed.add_field(name='Expires', value=humanize.naturaldelta(infraction.expires_at - datetime.utcnow()))
@@ -443,10 +444,79 @@ class AdminPlugin(Plugin):
 
         event.msg.reply(tbl.compile())
 
+    # Thanks OGNovuh / Terminator966
     @Plugin.command('recent', aliases=['latest'], group='infractions', level=CommandLevels.MOD)
     def infractions_recent(self, event):
-        # TODO: fucking write this bruh
-        pass
+        user = User.alias()
+        actor = User.alias()
+
+        infraction = Infraction.select(Infraction, user, actor).join(
+            user,
+            on=((Infraction.user_id == user.user_id).alias('user'))
+        ).switch(Infraction).join(
+            actor,
+            on=((Infraction.actor_id == actor.user_id).alias('actor'))
+        ).where(
+            (Infraction.guild_id == event.guild.id)
+        ).order_by(Infraction.created_at.desc()).limit(1).get()
+        
+        type_ = {i.index: i for i in Infraction.Types.attrs}[infraction.type_]
+        embed = MessageEmbed()
+
+        if type_ in (Infraction.Types.MUTE, Infraction.Types.TEMPMUTE, Infraction.Types.TEMPROLE):
+            embed.color = 0xfdfd96
+        elif type_ in (Infraction.Types.KICK, Infraction.Types.SOFTBAN):
+            embed.color = 0xffb347
+        else:
+            embed.color = 0xff6961
+
+        embed.title = str(type_).title()
+        embed.set_thumbnail(url=infraction.user.get_avatar_url())
+        embed.add_field(name='User', value=unicode(infraction.user), inline=True)
+        embed.add_field(name='Moderator', value=unicode(infraction.actor), inline=True)
+        embed.add_field(name='ID', value=unicode(infraction.id), inline=True)
+        embed.add_field(name='Active', value='yes' if infraction.active else 'no', inline=True)
+        if infraction.active and infraction.expires_at:
+            embed.add_field(name='Expires', value=humanize.naturaldelta(infraction.expires_at - datetime.utcnow()))
+        embed.add_field(name='Reason', value=infraction.reason or '_No Reason Given', inline=False)
+        embed.timestamp = infraction.created_at.isoformat()
+        event.msg.reply('', embed=embed)
+
+    # Thanks OGNovuh / Terminator966
+    @Plugin.command('delete', '<infraction:int>', group='infractions', aliases=['remove', 'del', 'rem', 'rm', 'rmv'], level=-1)
+    def infraction_delete(self, event, infraction):
+        try:
+            inf = Infraction.select(Infraction).where(
+                    (Infraction.id == infraction)
+            ).get()
+        except Infraction.DoesNotExist:
+            raise CommandFail('cannot find an infraction with ID `{}`'.format(infraction))
+
+        msg = event.msg.reply('Ok, delete infraction #{}?'.format(infraction))
+        msg.chain(False).\
+            add_reaction(GREEN_TICK_EMOJI).\
+            add_reaction(RED_TICK_EMOJI)
+
+        try:
+            mra_event = self.wait_for_event(
+                'MessageReactionAdd',
+                message_id=msg.id,
+                conditional=lambda e: (
+                    e.emoji.id in (GREEN_TICK_EMOJI_ID, RED_TICK_EMOJI_ID) and
+                    e.user_id == event.author.id
+                )).get(timeout=10)
+        except gevent.Timeout:
+            return
+        finally:
+            msg.delete()
+
+        if mra_event.emoji.id != GREEN_TICK_EMOJI_ID:
+            return
+        
+        inf.delete_instance()
+        self.queue_infractions()
+
+        raise CommandSuccess('deleted infraction #{}.'.format(infraction))
 
     @Plugin.command('duration', '<infraction:int> <duration:str>', group='infractions', level=CommandLevels.MOD)
     def infraction_duration(self, event, infraction, duration):
@@ -512,16 +582,38 @@ class AdminPlugin(Plugin):
 
         raise CommandSuccess('I\'ve updated the reason for infraction #{}'.format(inf.id))
 
-    @Plugin.command('roles', level=CommandLevels.MOD)
-    def roles(self, event):
+    # Full credit goes to: Xenthys
+    @Plugin.command('roles', '[pattern:str...]', level=CommandLevels.MOD)
+    def roles(self, event, pattern=None):
         buff = ''
-        for role in event.guild.roles.values():
-            role = S(u'{} - {}\n'.format(role.id, role.name), escape_codeblocks=True)
+        g = event.guild
+
+        total = {}
+        members = g.members.values()
+        for member in members:
+            for role_id in member.roles:
+                total[role_id] = total.get(role_id, 0) + 1
+
+        roles = g.roles.values()
+        roles = sorted(roles, key=lambda r: r.position, reverse=True)
+        for role in roles:
+            if pattern and role.name.lower().find(pattern.lower()) == -1: continue
+            role_members = total.get(role.id, 0) if role.id != g.id else len(g.members)
+            role = S(u'{} - {} ({} member{})\n'.format(
+                role.id,
+                role.name,
+                role_members,
+                's' if role_members != 1 else ''
+            ), escape_codeblocks=True)
             if len(role) + len(buff) > 1990:
-                event.msg.reply(u'```{}```'.format(buff))
+                event.msg.reply(u'```dns\n{}```'.format(buff))
                 buff = ''
             buff += role
-        return event.msg.reply(u'```{}```'.format(buff))
+
+        if not buff:
+            return
+
+        return event.msg.reply(u'```dns\n{}```'.format(buff))
 
     @Plugin.command('restore', '<user:user>', level=CommandLevels.MOD, group='backups')
     def restore(self, event, user):
@@ -1441,3 +1533,7 @@ class AdminPlugin(Plugin):
             raise CommandSuccess('slowmode enabled')
         elif interval == 0:
             raise CommandSuccess('slowmode disabled')
+
+    @Plugin.command('ping', level=CommandLevels.MOD)
+    def ping(self, event):
+        raise CommandSuccess('Pong!')
